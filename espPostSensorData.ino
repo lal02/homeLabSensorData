@@ -12,8 +12,14 @@
 //light sensor
 Adafruit_TSL2561_Unified tsl = Adafruit_TSL2561_Unified(TSL2561_ADDR_FLOAT);
 
-// sensorPin of soilHumiditySensor
-int sensorPin = 35;
+// soilSensorOnePin of soilHumiditySensor - right plant
+const int soilSensorOnePin = 35;
+// soilSensorOnePin of soilHumiditySensor - left plant
+const int soilSensorTwoPin = 34;
+
+const int MQ135Pin = 17;
+
+const int MQ7Pin = 4;
 
 
 // WIFI login data
@@ -21,7 +27,7 @@ const char WIFI_SSID[] = "WIFI-Z77IDEY";
 const char WIFI_PASSWORD[] = ""; 
 
 // url of java backend
-String HOST_NAME   = "http://10.1.10.13:8080"; 
+const String HOST_NAME   = "http://10.1.10.12:8080"; 
 
 // humidity and temperature sensor data
 #define DHTPIN 2     
@@ -34,14 +40,12 @@ const char* ntpServer = "pool.ntp.org";
 const long utcOffsetInSeconds = 3600; // UTC +1 (für Mitteleuropa)
 
 // sensor reading interval
-uint32_t delayMS = 900000; // 15 minutes
+const int delayMS = 900000; // 15 minutes
 //uint32_t delayMS = 60000; // 1 minute
 
 
 void setup() {
   Serial.begin(9600);
-  
-
   //setup wifi data
   Serial.println("wifi setup");
   WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
@@ -50,25 +54,19 @@ void setup() {
     Serial.println("WiFi not connected!");
     delay(1000);
   }
-
   //setup dht22 sensor
   Serial.println("dht22 setup");
   sensor_t sensor;
   dht.begin();
   dht.temperature().getSensor(&sensor);
   dht.humidity().getSensor(&sensor);
-
-  Serial.println("Setup finished, moving to loop");
-  
-
   // NTP-Server synchronisieren
   configTime(utcOffsetInSeconds, 0, ntpServer);
-
   //setup light sensor tsl251
   tsl.setGain(TSL2561_GAIN_1X);  // Niedrigerer Bereich, wenn der Sensor überlastet ist
   tsl.setIntegrationTime(TSL2561_INTEGRATIONTIME_402MS);  // Setze die Integrationszeit
   Serial.println("TSL2561 initialized.");
-
+  Serial.println("Setup finished, moving to loop");
 }
 
 void loop() {
@@ -78,9 +76,7 @@ void loop() {
   Serial.println("Reconnecting to WiFi...");
   WiFi.disconnect();
   WiFi.reconnect();
-}
-
-  HTTPClient http;
+  }
   //get current timestamp from time-server
   struct tm timeinfo;
   getLocalTime(&timeinfo);
@@ -95,22 +91,7 @@ void loop() {
     Serial.println(F("Error reading temperature!"));
   }
   else {
-    Serial.print(F("Temperature: "));
-    Serial.print(event.temperature);
-    Serial.println(F("°C"));
-
-    // send data to java backend via post request
-    http.begin(HOST_NAME + "/temperature");
-    http.addHeader("Content-Type", "application/json");
-    String payload = "{";
-    payload += "\"value\":\"" + String(event.temperature) + "\",";
-    payload += "\"timestamp\":\"" + String(buffer) + "\"";
-    payload += "}";
-    int httpCode = http.POST(payload);
-
-    http.end();
-    Serial.print("HTTP Return Code of POST temperature Request: ");
-    Serial.println(httpCode);
+    sendHttpRequest("/temperature", String(event.temperature), String(buffer));
   }
 
 
@@ -121,80 +102,70 @@ void loop() {
   }
   else {
     Serial.print(event.relative_humidity);
-    
-    http.begin(HOST_NAME + "/humidity");
-    http.addHeader("Content-Type", "application/json");
-
-    String payload = "{";
-    payload += "\"value\":\"" + String(event.relative_humidity) + "\",";
-    payload += "\"timestamp\":\"" + String(buffer) + "\"";
-    payload += "}";
-
-    int httpCode = http.POST(payload);
-    http.end();
-    Serial.print("HTTP Return Code of POST humidity request: ");
-    Serial.println(httpCode);
-
-
+    sendHttpRequest("/humidity", String(event.relative_humidity), String(buffer));
   }
 
-
-  // light sensor
+  // read light data from TSL2561 sensor
   sensors_event_t lightEvent;
   tsl.getEvent(&lightEvent);
   if (event.light) {
-    Serial.print("Light: ");
-    Serial.println(lightEvent.light);
-    http.begin(HOST_NAME + "/light");
-    http.addHeader("Content-Type", "application/json");
-    String payload = "{";
-    payload += "\"value\":\"" + String(lightEvent.light) + "\",";
-    payload += "\"timestamp\":\"" + String(buffer) + "\"";
-    payload += "}";
-
-    int httpCode = http.POST(payload);
-    http.end();
-    Serial.print("HTTP Return Code of POST Light request: ");
-    Serial.println(httpCode);
-
+   sendHttpRequest("/light", String(lightEvent.light), String(buffer));
   } else {
     Serial.print("Sensor overload sending 0 Lux instead");
-
-    http.begin(HOST_NAME + "/light");
-    http.addHeader("Content-Type", "application/json");
-    String payload = "{";
-    payload += "\"value\":\"" + String("0.0") + "\",";
-    payload += "\"timestamp\":\"" + String(buffer) + "\"";
-    payload += "}";
-
-    int httpCode = http.POST(payload);
-    http.end();
-    Serial.print("HTTP Return Code of POST Light request: ");
-    Serial.println(httpCode);
-
+    sendHttpRequest("/light", "0.0", String(buffer));
   }
 
     
   //niedriger Wert = feucht; hoher Wert = trocken
   // Soil humidity sensor
-  int sensorValue = analogRead(sensorPin);
-  
-  Serial.print("moisture sensor data: ");
-  Serial.println(sensorValue);
-    http.begin(HOST_NAME + "/soilhumidity");
-    http.addHeader("Content-Type", "application/json");
-    String payload = "{";
-    payload += "\"value\":\"" + String(sensorValue) + "\",";
-    payload += "\"timestamp\":\"" + String(buffer) + "\"";
-    payload += "}";
+  //right plant (old) ; id = 0
+  sendHttpRequestSoilHumidity("/soilhumidity", String(analogRead(soilSensorOnePin)), String(buffer),String(0));
 
-    int httpCode = http.POST(payload);
-    http.end();
-    Serial.print("HTTP Return Code of POST soil humidity request: ");
-    Serial.println(httpCode);
+  // Left Plant (new) ; id = 1
+  sendHttpRequestSoilHumidity("/soilhumidity",String(analogRead(soilSensorTwoPin)),String(buffer),String(1));
+
+  // Air quality sensor MQ135
+  sendHttpRequest("/airquality",String(analogRead(MQ135Pin)),String(buffer));
+
+  // CO sensor MQ7
+  sendHttpRequest("/co",String(analogRead(MQ7Pin)),String(buffer));
+
 
   Serial.print("Waiting for ");
   Serial.print(delayMS/1000);
   Serial.println("seconds until next interval");
   delay(delayMS);
+}
+
+void sendHttpRequest(String URL, String value,String timestamp){
+  HTTPClient http;
+  http.begin(HOST_NAME + URL);
+  http.addHeader("Content-Type", "application/json");
+  String payload = "{";
+  payload += "\"value\":\"" + value + "\",";
+  payload += "\"timestamp\":\"" + timestamp + "\"";
+  payload += "}";
+  int httpCode = http.POST(payload);
+  http.end();
+  Serial.print("HTTP Return Code of request to : ");
+  Serial.print (" " + URL);
+  Serial.print(" with value: " + value + " and timestamp " + timestamp);
+  Serial.println(httpCode);
+}
+
+void sendHttpRequestSoilHumidity(String URL, String value,String timestamp,String sensorid){
+  HTTPClient http;
+  http.begin(HOST_NAME + URL);
+  http.addHeader("Content-Type", "application/json");
+  String payload = "{";
+  payload += "\"value\":\"" + value + "\",";
+  payload += "\"timestamp\":\"" + timestamp + "\",";
+  payload += "\"sensorid\":\"" + sensorid + "\"";
+  payload += "}";
+  int httpCode = http.POST(payload);
+  http.end();
+  Serial.print("HTTP Return Code of request to : ");
+  Serial.print (" " + URL);
+  Serial.print(" with value: " + value + " and timestamp " + timestamp);
+  Serial.println(httpCode);
 }
